@@ -1,0 +1,17 @@
+metric,value
+device,cuda (NVIDIA GeForce RTX 3060)
+epochs_completed,63
+total_training_time_s,836.6248376999283
+mean_epoch_time_s,13.279759328570291
+mean_train_time_per_epoch_s,12.400861047618072
+mean_val_time_per_epoch_s,0.878348055553885
+mean_train_throughput_img_per_s,57.89428181882534
+test_eval_time_s,0.819426999980351
+test_images,89
+inference_ms_per_image_bs1,2.3461600008886307
+inference_fps_bs1,426.22839005917774
+inference_ms_per_image_bs8,2.047244374989532
+inference_fps_bs8,488.461471535421
+params_million,7.019587
+discriminator_params_million_training_only,0.696672
+macs_giga_256x256,10.238820352
