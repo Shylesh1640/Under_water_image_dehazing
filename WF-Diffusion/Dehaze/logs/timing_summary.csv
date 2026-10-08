@@ -1,0 +1,6 @@
+metric,value
+device,cuda
+params_million,22.147731
+inference_ms_per_image,1473.1796500040218
+inference_fps,0.6788038376699475
+ddim_steps,100
