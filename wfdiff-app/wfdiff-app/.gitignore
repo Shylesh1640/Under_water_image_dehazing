@@ -1,0 +1,20 @@
+node_modules
+dist
+.env
+.env.*
+!.env.example
+__pycache__
+*.pyc
+.venv
+
+# Model weights (hosted on Hugging Face, not needed in GitHub)
+*.pth
+*.pt
+*.onnx
+*.ipynb
+
+# Gradio cache
+.gradio/
+
+# IDE / editor
+.claude/

@@ -1,0 +1,5 @@
+@tailwind base; @tailwind components; @tailwind utilities;
+body { @apply bg-abyss text-slate-100 font-sans antialiased; background-image: radial-gradient(1200px 500px at 50% -10%, #0f3550 0%, transparent 70%); min-height: 100vh; }
+:focus-visible { outline: 2px solid #22d3ee; outline-offset: 2px; }
+.panel { @apply rounded-2xl border border-cyan-300/10 bg-deep/70 backdrop-blur-sm; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
