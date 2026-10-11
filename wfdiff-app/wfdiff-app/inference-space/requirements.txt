@@ -1,8 +1,10 @@
-torch --index-url https://download.pytorch.org/whl/cpu
+--index-url https://download.pytorch.org/whl/cpu
+--extra-index-url https://pypi.org/simple/
+torch
 numpy
 pillow
 opencv-python-headless
-gradio>=4.44
+flask
+flask-cors
 huggingface_hub
 einops
-uvicorn

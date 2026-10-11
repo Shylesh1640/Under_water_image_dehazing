@@ -1,62 +1,61 @@
-import json, logging, os
-import gradio as gr
+import base64, gc, io, json, logging, os, time
 import torch
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from PIL import Image
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-
-try:
-    import spaces
-    gpu = spaces.GPU(duration=120)
-except Exception:
-    def gpu(fn): return fn
 
 import model_loader
 
 logging.basicConfig(level=logging.INFO)
-MAX_SIDE = 4096
-HERE = os.path.dirname(os.path.abspath(__file__))
-STATIC_DIR = os.path.join(HERE, "static")
+log = logging.getLogger(__name__)
 
-@gpu
-def enhance(image: Image.Image):
-    if image is None:
-        raise gr.Error("No image provided.")
+app = Flask(__name__)
+CORS(app)
+
+MAX_SIDE = 4096
+
+def _mem_mb():
+    try:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    except Exception:
+        pass
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        return -1
+
+@app.route('/health')
+def health():
+    return jsonify({"status": "ok", "mem_mb": round(_mem_mb(), 1)})
+
+@app.route('/enhance', methods=['POST'])
+def enhance():
+    log.info("Request received, mem=%.0f MB", _mem_mb())
+    if 'image' not in request.files:
+        return jsonify({"error": "No image provided"}), 400
+    file = request.files['image']
+    image = Image.open(file.stream).convert("RGB")
     if max(image.size) > MAX_SIDE:
         image.thumbnail((MAX_SIDE, MAX_SIDE), Image.LANCZOS)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
-        out, info = model_loader.enhance(image, device)
+        out, info = model_loader.enhance(image, "cpu")
     except model_loader.ModelLoadError as e:
-        raise gr.Error(f"Model error: {e}")
-    return out, json.dumps(info)
+        return jsonify({"error": f"Model error: {e}"}), 500
+    log.info("Inference done, mem=%.0f MB", _mem_mb())
+    buf = io.BytesIO()
+    out.save(buf, format='PNG')
+    img_b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+    gc.collect()
+    return jsonify({
+        "image": f"data:image/png;base64,{img_b64}",
+        "info": info,
+    })
 
-with gr.Blocks(title="WF-Diff") as demo:
-    gr.Markdown("# WF-Diff underwater image restoration\nOutput is 256x256.")
-    with gr.Row():
-        inp = gr.Image(type="pil", label="Underwater image", format="png")
-        out = gr.Image(type="pil", label="Enhanced", format="png")
-    info = gr.Textbox(label="Run info (JSON)")
-    gr.Button("Enhance Image", variant="primary").click(enhance, inp, [out, info], api_name="enhance")
-
-app = FastAPI()
-
-# Mount Gradio at /gradio (API available at /gradio/gradio_api/*)
-app = gr.mount_gradio_app(app, demo, path="/gradio")
-
-# Serve React frontend at root
-if os.path.isdir(STATIC_DIR):
-    @app.get("/")
-    async def serve_index():
-        return FileResponse(os.path.join(STATIC_DIR, "index.html"))
-
-    app.mount("/assets", StaticFiles(directory=os.path.join(STATIC_DIR, "assets")), name="assets")
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 7860))
-    print(f"\n  React frontend: http://localhost:{port}/")
-    print(f"  Gradio UI:      http://localhost:{port}/gradio")
-    print(f"  Gradio API:     http://localhost:{port}/gradio/gradio_api/\n")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    log.info("Starting app, mem=%.0f MB", _mem_mb())
+    port = int(os.environ.get('PORT', 7860))
+    app.run(host='0.0.0.0', port=port)

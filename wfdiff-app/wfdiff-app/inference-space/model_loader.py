@@ -1,5 +1,5 @@
 """Loads the trained WF-Diff model. Never substitutes random weights."""
-import logging, os, time
+import gc, logging, os, time
 import cv2
 import numpy as np
 import torch
@@ -10,9 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT = os.path.join(HERE, "models", "best_model_wfdiff.pth")
 HF_MODEL_REPO = "Shylesh1640/wfdiff-model"
 HF_MODEL_FILE = "best_model_wfdiff.pth"
-IMG_SIZE = 256            # documented in notebook; inference resizes with OpenCV
-DDIM_STEPS = 10           # documented full-pipeline value
-# Documented config from notebook: inner_channel=48, 24 GroupNorm groups, 2000 linear timesteps, 6-ch in / 3-ch out.
+IMG_SIZE = 256
 MODEL_KWARGS: dict = {
     "in_channel": 6,
     "out_channel": 3,
@@ -29,25 +27,17 @@ MODEL_KWARGS: dict = {
 }
 
 class ModelLoadError(RuntimeError): pass
-_model = None
 
 def _import_arch():
     try:
-        from model_architecture.wfdiff import WfDiffx2, wfdiff_infer  # extracted from notebook
+        from model_architecture.wfdiff import WfDiffx2, DWT, IWT
     except ImportError as e:
         raise ModelLoadError(
-            "WF-Diff architecture not found. Extract it from the notebook into "
-            "model_architecture/wfdiff.py (see model_architecture/EXTRACT_FROM_NOTEBOOK.md)."
+            "WF-Diff architecture not found."
         ) from e
-    return WfDiffx2, wfdiff_infer
+    return WfDiffx2, DWT, IWT
 
-def load_model(device="cpu"):
-    """Build WfDiffx2 and load best_model_wfdiff.pth with strict=True."""
-    global _model
-    if _model is not None:
-        return _model
-    if "padiff" in os.path.basename(CHECKPOINT).lower():
-        raise ModelLoadError("PADiff checkpoint must not be used.")
+def _ensure_checkpoint():
     if not os.path.isfile(CHECKPOINT):
         log.info("Checkpoint not found locally, downloading from HuggingFace...")
         try:
@@ -59,38 +49,103 @@ def load_model(device="cpu"):
             raise ModelLoadError(f"Cannot download checkpoint: {e}") from e
     if not os.path.isfile(CHECKPOINT):
         raise ModelLoadError(f"Checkpoint missing: models/{os.path.basename(CHECKPOINT)}")
-    WfDiffx2, _ = _import_arch()
+
+def _load_fresh_model(device="cpu"):
+    """Load a fresh model instance each time (no caching) to enable memory-staged inference."""
+    _ensure_checkpoint()
+    WfDiffx2, _, _ = _import_arch()
     model = WfDiffx2(**MODEL_KWARGS)
     try:
+        ckpt = torch.load(CHECKPOINT, map_location="cpu", weights_only=True, mmap=True)
+    except TypeError:
         ckpt = torch.load(CHECKPOINT, map_location="cpu", weights_only=True)
     except Exception as e:
         raise ModelLoadError(f"Cannot read checkpoint: {e}") from e
-    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt  # raw state_dict or final format
+    state = ckpt["model"] if isinstance(ckpt, dict) and "model" in ckpt else ckpt
+    del ckpt
+    gc.collect()
     try:
+        model.load_state_dict(state, strict=True, assign=True)
+    except TypeError:
         model.load_state_dict(state, strict=True)
     except RuntimeError as e:
         raise ModelLoadError(f"Checkpoint incompatible with WfDiffx2: {str(e)[:500]}") from e
-    _model = model.to(device).eval()
+    del state
+    gc.collect()
+    model = model.to(device).eval()
+    gc.collect()
     log.info("Loaded WF-Diff on %s (%.2fM params)", device, sum(p.numel() for p in model.parameters()) / 1e6)
-    return _model
+    return model
+
+def _free_module(parent, attr_name):
+    """Delete a sub-module from the parent to free its parameters."""
+    if hasattr(parent, attr_name):
+        delattr(parent, attr_name)
+    gc.collect()
+
+def _mem_mb():
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return int(line.split()[1]) / 1024
+    except Exception:
+        return -1
+
+@torch.inference_mode()
+def _staged_infer(model, x, device):
+    """Run WF-Diff inference in stages, freeing each sub-module after use to reduce peak memory."""
+    _, DWT_cls, IWT_cls = _import_arch()
+    dwt, idwt = DWT_cls(), IWT_cls()
+
+    log.info("Stage 1: init_predictor, mem=%.0f MB", _mem_mb())
+    x_, _, _ = model.init_predictor(x)
+    _free_module(model, 'init_predictor')
+
+    n = x_.shape[0]
+    input_dwt = dwt(x_)
+    input_LL, input_high0 = input_dwt[:n], input_dwt[n:]
+    del input_dwt
+
+    x_HH, x_LL = model.cfc(input_LL, input_high0)
+    _free_module(model, 'cfc')
+    gc.collect()
+
+    log.info("Stage 2: denoiser1 (LL), mem=%.0f MB", _mem_mb())
+    noisell, _ = model.denoiser1(input_LL, None, x_LL)
+    del x_LL
+    _free_module(model, 'denoiser1')
+
+    log.info("Stage 3: denoiser2 (high), mem=%.0f MB", _mem_mb())
+    noisehigh, _ = model.denoiser2(input_high0, None, x_HH)
+    del x_HH
+    _free_module(model, 'denoiser2')
+
+    log.info("Stage 4: reconstruct, mem=%.0f MB", _mem_mb())
+    out1_dwt = dwt(x_)
+    del x_
+    out1_LL, out1_high0 = out1_dwt[:n], out1_dwt[n:]
+    del out1_dwt
+    result = idwt(torch.cat((out1_LL + noisell, out1_high0 + noisehigh), dim=0))
+    del out1_LL, out1_high0, noisell, noisehigh, input_LL, input_high0
+    gc.collect()
+    log.info("Done, mem=%.0f MB", _mem_mb())
+    return result
 
 def enhance(image: Image.Image, device="cpu") -> tuple[Image.Image, dict]:
-    """Runs the notebook's inference pipeline on one image (batch size 1)."""
-    _, wfdiff_infer = _import_arch()
-    model = load_model(device)
+    """Runs inference with staged memory management."""
     t0 = time.time()
     rgb = np.array(image.convert("RGB"))
-    # Resize with OpenCV to 256x256 matching the notebook's dehaze_image pipeline
     rgb_resized = cv2.resize(rgb, (IMG_SIZE, IMG_SIZE), interpolation=cv2.INTER_AREA)
-    # Convert to 1x3xHxW float32 tensor in [0, 1]
     I = torch.from_numpy(rgb_resized.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
+
+    model = _load_fresh_model(device)
     try:
-        with torch.inference_mode():
-            out = wfdiff_infer(model, I)
-    except torch.cuda.OutOfMemoryError as e:
-        raise ModelLoadError("GPU out of memory") from e
-    if device == "cuda":
-        log.info("peak GPU mem: %.0f MB", torch.cuda.max_memory_allocated() / 1e6)
+        out = _staged_infer(model, I, device)
+    finally:
+        del model
+        gc.collect()
+
     if torch.is_tensor(out):
         out_np = (out.squeeze(0).detach().clamp(0, 1).permute(1, 2, 0).cpu().float().numpy() * 255.0).round().astype(np.uint8)
     else:

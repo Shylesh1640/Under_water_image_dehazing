@@ -89,7 +89,7 @@ export default function App() {
         <button onClick={run} disabled={busy || !file} className="mt-5 inline-flex items-center gap-2 rounded-lg bg-cyan-400 px-5 py-2.5 font-bold text-abyss disabled:cursor-not-allowed disabled:opacity-50">
           {busy ? <Loader2 className="animate-spin" size={18} aria-hidden /> : <Waves size={18} aria-hidden />}Enhance Image
         </button>
-        {busy && <p className="mt-3 text-sm text-slate-300" role="status">{status}. Diffusion sampling can take a while, and the first request may need to start the GPU.</p>}
+        {busy && <p className="mt-3 text-sm text-slate-300" role="status">{status}. Diffusion sampling can take a while on CPU, and the first request may need to load the model.</p>}
         {error && (
           <div role="alert" className="mt-4 flex items-start gap-3 rounded-lg border border-rose-400/40 bg-rose-950/40 p-3 text-sm">
             <AlertTriangle size={18} className="mt-0.5 shrink-0 text-rose-300" aria-hidden /><span className="flex-1">{error}</span>

@@ -1399,7 +1399,7 @@ class GaussianDiffusionx2(nn.Module):
         ret_img = x
 
         
-        time_steps = np.array([1898, 1640, 1539, 1491, 1370, 1136, 972, 858, 680, 340])
+        time_steps = np.array([1898, 1491, 1136, 680, 340])
             # time_steps = np.asarray(list(range(0, 1000, int(1000/4))) + list(range(1000, 2000, int(1000/6))))
             # time_steps = np.flip(time_steps[:-1])
         for j, i in enumerate(time_steps):
