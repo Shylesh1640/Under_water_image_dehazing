@@ -1,0 +1,17 @@
+metric,value
+device,cuda (NVIDIA GeForce RTX 5050 Laptop GPU)
+epochs_completed,100
+total_training_time_s,87040.65437740007
+mean_epoch_time_s,870.4065437740006
+mean_train_time_per_epoch_s,726.6910418439999
+mean_val_time_per_epoch_s,143.67576070599986
+mean_train_throughput_img_per_s,1.4756682397289498
+test_eval_time_s,14407.9324911
+test_images,89
+sampling_steps_val,50
+sampling_steps_test,1000
+inference_ms_per_image_bs1,155750.8428000001
+inference_fps_bs1,0.006420511003488447
+params_million,121.072515
+macs_per_unet_call_giga,629.750693888
+macs_giga_256x256,629750.693888
